@@ -1,0 +1,39 @@
+name: Test toolchain resolution
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  resolver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 -m pip install PyYAML==6.0.3
+      - run: python3 -m unittest discover -s tests -v
+
+  integration:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [runtime-object, runtime-array, node-override, bare-pnpm, pnpm-precedence, defaults]
+    env:
+      SCENARIO: ${{ matrix.scenario }}
+      EXPECT_NODE: ${{ (matrix.scenario == 'node-override' || matrix.scenario == 'defaults') && '24' || '22' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Create project fixture
+        run: python3 tests/create_integration_fixture.py
+      - name: Install and build with the composite action
+        uses: ./
+        with:
+          path: work/test site
+          node-version: ${{ matrix.scenario == 'node-override' && '24' || '' }}
+          package-manager: ${{ matrix.scenario == 'bare-pnpm' && 'pnpm' || '' }}
+          cache: false
+      - name: Verify build output
+        run: test -f 'work/test site/dist/index.html'

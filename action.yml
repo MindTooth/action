@@ -5,9 +5,9 @@ branding:
   color: "purple"
 inputs:
   node-version:
-    description: "The node version to use"
+    description: "Node version override. Otherwise use package.json (Volta, devEngines.runtime, or engines.node), falling back to 24."
     required: false
-    default: "24"
+    default: ""
   package-manager:
     description: "You may specify your preferred package manager (one of `npm | yarn | pnpm | bun | deno` and an optional `@<version>` tag). Otherwise, the package manager will be automatically detected."
     required: false
@@ -36,60 +36,92 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Check lockfiles
+    - name: Resolve toolchain
+      id: toolchain
       shell: "bash"
       working-directory: ${{ inputs.path }}
       env:
         INPUT_PM: ${{ inputs.package-manager }}
+        INPUT_NODE: ${{ inputs.node-version }}
+        PROJECT_PATH: ${{ inputs.path }}
       run: |
-        len=`echo $INPUT_PM | wc -c`
-        if [ $len -gt 1 ]; then
-          PACKAGE_MANAGER=$(echo "$INPUT_PM" | grep -o '^[^@]*')
-          VERSION=$(echo "$INPUT_PM" | { grep -o '@.*' || true; } | sed 's/^@//')
-          # Set default VERSION if not provided
-          if [ -z "$VERSION" ]; then
-              if [ "$PACKAGE_MANAGER" = "deno" ]; then
-                  # The denoland/setup-deno action equivalent of "latest"
-                  VERSION="vx.x.x"
-              else
-                  VERSION="latest"
-              fi
-          fi
-          echo "PACKAGE_MANAGER=$PACKAGE_MANAGER" >> $GITHUB_ENV
-        elif [ $(find "." -maxdepth 1 -name "pnpm-lock.yaml") ]; then
-            echo "PACKAGE_MANAGER=pnpm" >> $GITHUB_ENV
-            echo "LOCKFILE=pnpm-lock.yaml" >> $GITHUB_ENV
-            # If packageManager field is not present, use latest version.
-            if ! jq -e '.packageManager' package.json > /dev/null 2>&1; then
-                VERSION="latest"
-                # Annotate this action run to let users know we’re using the default.
-                echo "::warning title=Could not detect PNPM version::No \`packageManager\` field found in \`package.json\`. Using latest PNPM version instead. We recommend specifying \`pnpm@VERSION\` explicitly using the \`packageManager\` field in your \`package.json\`."
-            fi
-        elif [ $(find "." -maxdepth 1 -name "yarn.lock") ]; then
-            echo "PACKAGE_MANAGER=yarn" >> $GITHUB_ENV
-            echo "LOCKFILE=yarn.lock" >> $GITHUB_ENV
-        elif [ $(find "." -maxdepth 1 -name "package-lock.json") ]; then
-            VERSION="latest"
-            echo "PACKAGE_MANAGER=npm" >> $GITHUB_ENV
-            echo "LOCKFILE=package-lock.json" >> $GITHUB_ENV
-        elif [ $(find "." -maxdepth 1 -name "bun.lock") ]; then
-            VERSION="latest"
-            echo "PACKAGE_MANAGER=bun" >> $GITHUB_ENV
-            echo "LOCKFILE=bun.lock" >> $GITHUB_ENV
-        elif [ $(find "." -maxdepth 1 -name "bun.lockb") ]; then
-            VERSION="latest"
-            echo "PACKAGE_MANAGER=bun" >> $GITHUB_ENV
-            echo "LOCKFILE=bun.lockb" >> $GITHUB_ENV
-        elif [ -f "deno.json" ] || [ -f "deno.jsonc" ] || [ -f "deno.lock" ]; then
-            VERSION="vx.x.x"
-            echo "PACKAGE_MANAGER=deno" >> $GITHUB_ENV
-            echo "LOCKFILE=deno.lock" >> $GITHUB_ENV
-        else
-            echo "No lockfile found.
-        Please specify your preferred \"package-manager\" in the action configuration."
-            exit 1
+        # Fail on malformed manifests rather than silently selecting defaults.
+        if [ -f package.json ]; then
+          jq empty package.json
         fi
-        echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+        NODE_VERSION="$INPUT_NODE"
+        NODE_VERSION_FILE=""
+        if [ -z "$NODE_VERSION" ]; then
+          # Let setup-node resolve precedence, runtime arrays, and Volta inheritance.
+          if [ -f package.json ] && jq -e '
+            .volta.node or .volta.extends or .engines.node or
+            ([.devEngines.runtime // []] | flatten |
+              any((.name? | strings | ascii_downcase == "node") and
+                (.version? | strings | length > 0)))
+          ' package.json > /dev/null; then
+            NODE_VERSION_FILE="$PROJECT_PATH/package.json"
+          else
+            NODE_VERSION="24"
+          fi
+        fi
+        echo "node-version=$NODE_VERSION" >> "$GITHUB_OUTPUT"
+        echo "node-version-file=$NODE_VERSION_FILE" >> "$GITHUB_OUTPUT"
+
+        VERSION=""
+        LOCKFILE=""
+        if [ -n "$INPUT_PM" ]; then
+          PACKAGE_MANAGER="${INPUT_PM%%@*}"
+          if [[ "$INPUT_PM" == *@* ]]; then
+            VERSION="${INPUT_PM#*@}"
+          fi
+        elif [ -f pnpm-lock.yaml ]; then
+          PACKAGE_MANAGER="pnpm"
+        elif [ -f yarn.lock ]; then
+          PACKAGE_MANAGER="yarn"
+        elif [ -f package-lock.json ]; then
+          PACKAGE_MANAGER="npm"
+        elif [ -f bun.lock ] || [ -f bun.lockb ]; then
+          PACKAGE_MANAGER="bun"
+        elif [ -f deno.json ] || [ -f deno.jsonc ] || [ -f deno.lock ]; then
+          PACKAGE_MANAGER="deno"
+        else
+          echo 'No lockfile found. Please specify your preferred "package-manager" in the action configuration.'
+          exit 1
+        fi
+
+        # Determine the cache lockfile even when the package manager is explicit.
+        case "$PACKAGE_MANAGER" in
+          pnpm) LOCKFILE="pnpm-lock.yaml" ;;
+          yarn) LOCKFILE="yarn.lock" ;;
+          npm) LOCKFILE="package-lock.json" ;;
+          bun)
+            if [ -f bun.lock ]; then LOCKFILE="bun.lock"; else LOCKFILE="bun.lockb"; fi
+            ;;
+          deno) LOCKFILE="deno.lock" ;;
+          *) echo "Unsupported package manager: $PACKAGE_MANAGER"; exit 1 ;;
+        esac
+
+        if [ "$PACKAGE_MANAGER" = "pnpm" ] && [ -z "$VERSION" ]; then
+          # pnpm/action-setup resolves devEngines before packageManager itself.
+          if ! { [ -f package.json ] && jq -e '
+            ((.devEngines.packageManager | type) == "object" and
+              .devEngines.packageManager.name == "pnpm" and
+              (.devEngines.packageManager.version | strings | length > 0)) or
+            (.packageManager | strings | startswith("pnpm@"))
+          ' package.json > /dev/null; }; then
+            VERSION="latest"
+            echo '::warning title=Could not detect PNPM version::No pnpm version found in package.json packageManager or devEngines.packageManager. Using latest PNPM version instead.'
+          fi
+        elif [ -z "$VERSION" ]; then
+          case "$PACKAGE_MANAGER" in
+            deno) VERSION="vx.x.x" ;;
+            npm|bun) VERSION="latest" ;;
+          esac
+        fi
+        echo "PACKAGE_MANAGER=$PACKAGE_MANAGER" >> "$GITHUB_ENV"
+        echo "LOCKFILE=$LOCKFILE" >> "$GITHUB_ENV"
+        echo "VERSION=$VERSION" >> "$GITHUB_ENV"
     - name: Setup PNPM
       if: ${{ env.PACKAGE_MANAGER == 'pnpm' }}
       uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -113,7 +145,8 @@ runs:
       uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       if: ${{ env.PACKAGE_MANAGER != 'bun' && env.PACKAGE_MANAGER != 'deno' }}
       with:
-        node-version: ${{ inputs.node-version }}
+        node-version: ${{ steps.toolchain.outputs.node-version }}
+        node-version-file: ${{ steps.toolchain.outputs.node-version-file }}
         cache: ${{ env.PACKAGE_MANAGER }}
         cache-dependency-path: "${{ inputs.path }}/${{ env.LOCKFILE }}"
 
@@ -121,7 +154,8 @@ runs:
       uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       if: ${{ env.PACKAGE_MANAGER == 'bun' }}
       with:
-        node-version: ${{ inputs.node-version }}
+        node-version: ${{ steps.toolchain.outputs.node-version }}
+        node-version-file: ${{ steps.toolchain.outputs.node-version-file }}
 
     - name: Install
       shell: bash

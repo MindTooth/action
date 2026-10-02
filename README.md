@@ -11,12 +11,35 @@ For more information, please see our complete deployment guide—[Deploy your As
 ### Inputs
 
 - `path` - Optional: the root location of your Astro project inside the repository.
-- `node-version` - Optional: the specific version of Node that should be used to build your site. Defaults to `24`.
-- `package-manager` - Optional: the Node package manager that should be used to install dependencies and build your site. Automatically detected based on your lockfile. Accepted values: `npm`, `yarn`, `pnpm`, `bun`, and `deno`. A version tag is also accepted, for example `npm@11.6.2`, `pnpm@10`, `bun@latest`, or `deno@v2.x`. If not provided, version will default to `latest`.
+- `node-version` - Optional: the specific version of Node that should be used to build your site. When omitted, reads `package.json` using `actions/setup-node`: `volta.node`, the first versioned Node entry in `devEngines.runtime` (object or array), `engines.node`, then inherited Volta configuration. Falls back to `24` when none is declared.
+- `package-manager` - Optional: the Node package manager that should be used to install dependencies and build your site. Automatically detected based on your lockfile. Accepted values: `npm`, `yarn`, `pnpm`, `bun`, and `deno`. A version tag is also accepted, for example `npm@11.6.2`, `pnpm@10`, `bun@latest`, or `deno@v2.x`. For pnpm, omitting the version lets `pnpm/action-setup` read `devEngines.packageManager` (a single object named `pnpm`) before the top-level `packageManager` field. Without either declaration, pnpm falls back to `latest`.
 - `build-cmd` - Optional: the command to run to build your site. Defaults to `deno task build` for sites using Deno and to `<package-manager> run build` for all other package managers.
 - `cache` - Optional: enable Astro build cache to speed up subsequent builds. Caches optimized images and other build assets. Defaults to `true`.
 - `cache-dir` - Optional: path to the Astro cache directory (relative to `path`). Defaults to `node_modules/.astro`. Only used when `cache` is `true`.
 - `out-dir` - Optional: path to the Astro output directory, as created by build (relative to `path`). Defaults to `dist`. This directory is artifacted by this action.
+
+### Using devEngines
+
+Declare the Node and pnpm versions in the `package.json` under `path`:
+
+```json
+{
+  "devEngines": {
+    "runtime": { "name": "node", "version": "22.x", "onFail": "error" },
+    "packageManager": { "name": "pnpm", "version": "10.11.0", "onFail": "error" }
+  }
+}
+```
+
+With a committed `pnpm-lock.yaml`, no version inputs are needed. You can also
+set `package-manager: pnpm` to select pnpm explicitly while still reading its
+version from the manifest. An explicit `node-version` overrides manifest-based
+Node selection. An explicit pnpm version is passed to `pnpm/action-setup`, which
+rejects conflicts with the top-level `packageManager` version.
+
+Package-manager selection still follows the lockfile or the explicit input.
+These setup actions select versions; they do not enforce `devEngines.onFail`.
+This action does not install npm or Yarn versions from `devEngines`.
 
 ### Example workflow:
 
@@ -51,7 +74,7 @@ jobs:
         uses: withastro/action@v6
         # with:
             # path: . # The root location of your Astro project inside the repository. (optional)
-            # node-version: 24 # The specific version of Node that should be used to build your site. Defaults to 24. (optional)
+            # node-version: 24 # The specific version of Node that should be used to build your site. Reads package.json, falling back to 24. (optional)
             # package-manager: pnpm@latest # The Node package manager that should be used to install dependencies and build your site. Automatically detected based on your lockfile. (optional)
             # build-cmd: pnpm run build # The command to run to build your site. Runs the package build script/task by default. (optional)
             # out-dir: dist # The output directory created by the build command. Defaults to dist. (optional)

@@ -15,7 +15,7 @@ manifest = {
     "scripts": {"build": "node build.cjs"},
     "devEngines": {
         "runtime": runtime,
-        "packageManager": {"name": "pnpm", "version": "10.34.0"},
+        "packageManager": {"name": "pnpm", "version": "11.28.2"},
     },
 }
 if scenario == "runtime-array":
@@ -35,7 +35,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { execFileSync } = require('node:child_process');
 assert.equal(process.versions.node.split('.')[0], process.env.EXPECT_NODE);
-assert.equal(execFileSync('pnpm', ['--version'], { encoding: 'utf8' }).trim(), '10.34.0');
+assert.equal(execFileSync('pnpm', ['--version'], { encoding: 'utf8' }).trim(), '11.28.2');
 fs.mkdirSync('dist', { recursive: true });
 fs.writeFileSync('dist/index.html', '<h1>Toolchain verified</h1>');
 """)

@@ -76,11 +76,11 @@ class ToolchainTests(unittest.TestCase):
 
     def test_pnpm_manifest_versions_delegate(self):
         for manifest in [
-            {"packageManager": "pnpm@10.34.0"},
-            {"packageManager": "pnpm@10.34.0+sha512.example"},
-            {"devEngines": {"packageManager": {"name": "pnpm", "version": "^10.34.0"}}},
+            {"packageManager": "pnpm@11.28.2"},
+            {"packageManager": "pnpm@11.28.2+sha512.example"},
+            {"devEngines": {"packageManager": {"name": "pnpm", "version": "^11.28.2"}}},
             {"packageManager": "pnpm@9.0.0", "devEngines": {
-                "packageManager": {"name": "pnpm", "version": "10.34.0"}}},
+                "packageManager": {"name": "pnpm", "version": "11.28.2"}}},
         ]:
             for pm in ["", "pnpm"]:
                 with self.subTest(manifest=manifest, pm=pm):
@@ -99,9 +99,9 @@ class ToolchainTests(unittest.TestCase):
                 self.assertIn("::warning", result.stdout)
 
     def test_pnpm_explicit_version(self):
-        _, values = self.successful(pm="pnpm@10.34.0", manifest={
+        _, values = self.successful(pm="pnpm@11.28.2", manifest={
             "devEngines": {"packageManager": {"name": "pnpm", "version": "9.0.0"}}})
-        self.assertEqual(values["VERSION"], "10.34.0")
+        self.assertEqual(values["VERSION"], "11.28.2")
 
     def test_other_package_managers(self):
         for pm, lockfile, version in [
@@ -117,7 +117,7 @@ class ToolchainTests(unittest.TestCase):
                     self.assertEqual(values["VERSION"], version)
 
     def test_explicit_manager_without_lockfile(self):
-        _, values = self.successful(files=[], pm="pnpm@10.34.0")
+        _, values = self.successful(files=[], pm="pnpm@11.28.2")
         self.assertEqual(values["PACKAGE_MANAGER"], "pnpm")
 
     def test_missing_lockfile_and_invalid_manager_fail(self):

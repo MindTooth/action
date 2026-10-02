@@ -26,7 +26,7 @@ Declare the Node and pnpm versions in the `package.json` under `path`:
 {
   "devEngines": {
     "runtime": { "name": "node", "version": "22.x", "onFail": "error" },
-    "packageManager": { "name": "pnpm", "version": "10.11.0", "onFail": "error" }
+    "packageManager": { "name": "pnpm", "version": "10.34.0", "onFail": "error" }
   }
 }
 ```
@@ -35,7 +35,9 @@ With a committed `pnpm-lock.yaml`, no version inputs are needed. You can also
 set `package-manager: pnpm` to select pnpm explicitly while still reading its
 version from the manifest. An explicit `node-version` overrides manifest-based
 Node selection. An explicit pnpm version is passed to `pnpm/action-setup`, which
-rejects conflicts with the top-level `packageManager` version.
+rejects conflicts with the top-level `packageManager` version. Use a pnpm release
+that supports `devEngines.packageManager` when declaring both fields; older pnpm
+releases may switch back to the top-level `packageManager` version during install.
 
 Package-manager selection still follows the lockfile or the explicit input.
 These setup actions select versions; they do not enforce `devEngines.onFail`.

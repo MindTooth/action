@@ -11,7 +11,7 @@ For more information, please see our complete deployment guide—[Deploy your As
 ### Inputs
 
 - `path` - Optional: the root location of your Astro project inside the repository.
-- `node-version` - Optional: the specific version of Node that should be used to build your site. When omitted, reads `package.json` using `actions/setup-node`: `volta.node`, the first versioned Node entry in `devEngines.runtime` (object or array), `engines.node`, then inherited Volta configuration. Falls back to `24` when none is declared.
+- `node-version` - Optional: the specific version of Node that should be used to build your site. When omitted, reads `package.json` with the same precedence as `actions/setup-node`: `volta.node`, the first versioned Node entry in `devEngines.runtime` (object or array), `engines.node`, then inherited Volta configuration. Falls back to `24` when no nonempty version is declared, including through Volta inheritance.
 - `package-manager` - Optional: the Node package manager that should be used to install dependencies and build your site. Automatically detected based on your lockfile. Accepted values: `npm`, `yarn`, `pnpm`, `bun`, and `deno`. A version tag is also accepted, for example `npm@11.6.2`, `pnpm@10`, `bun@latest`, or `deno@v2.x`. For pnpm, omitting the version lets `pnpm/action-setup` read `devEngines.packageManager` (a single object named `pnpm`) before the top-level `packageManager` field. Without either declaration, pnpm falls back to `latest`.
 - `build-cmd` - Optional: the command to run to build your site. Defaults to `deno task build` for sites using Deno and to `<package-manager> run build` for all other package managers.
 - `cache` - Optional: enable Astro build cache to speed up subsequent builds. Caches optimized images and other build assets. Defaults to `true`.
@@ -40,7 +40,7 @@ that supports `devEngines.packageManager` when declaring both fields; older pnpm
 releases may switch back to the top-level `packageManager` version during install.
 
 Package-manager selection still follows the lockfile or the explicit input.
-These setup actions select versions; they do not enforce `devEngines.onFail`.
+Toolchain setup selects versions; it does not enforce `devEngines.onFail`.
 This action does not install npm or Yarn versions from `devEngines`.
 
 ### Example workflow:

@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 import unittest
 
@@ -14,13 +15,31 @@ ACTION = yaml.safe_load((Path(__file__).parents[1] / "action.yml").read_text())
 RESOLVER = next(s for s in ACTION["runs"]["steps"] if s.get("id") == "toolchain")
 
 
+NODE = shutil.which("node")
+SCRIPT_RUNNER = """
+const fs = require('node:fs');
+const core = {
+  setOutput: (name, value) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`),
+  exportVariable: (name, value) => fs.appendFileSync(process.env.GITHUB_ENV, `${name}=${value}\n`),
+  warning: (message) => console.log(`::warning::${message}`),
+};
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+new AsyncFunction('core', 'require', fs.readFileSync(0, 'utf8'))(core, require)
+  .catch((error) => { console.error(error.message); process.exitCode = 1; });
+"""
+
+
 class ToolchainTests(unittest.TestCase):
-    def resolve(self, manifest=None, files=("pnpm-lock.yaml",), pm="", node="", path="."):
+    def resolve(self, manifest=None, files=("pnpm-lock.yaml",), pm="", node="", path=".", inherited=None):
         with tempfile.TemporaryDirectory() as root:
             project = Path(root) / path
             project.mkdir(parents=True, exist_ok=True)
             if manifest is not None:
                 (project / "package.json").write_text(json.dumps(manifest))
+            for name, data in (inherited or {}).items():
+                filename = Path(root) / name
+                filename.parent.mkdir(parents=True, exist_ok=True)
+                filename.write_text(json.dumps(data))
             for name in files:
                 (project / name).write_text("")
             env_file = Path(root) / "env"
@@ -28,9 +47,11 @@ class ToolchainTests(unittest.TestCase):
             env_file.touch()
             output_file.touch()
             result = subprocess.run(
-                ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", RESOLVER["run"]],
-                cwd=project,
-                env={**os.environ, "INPUT_PM": pm, "INPUT_NODE": node, "PROJECT_PATH": path,
+                [NODE, "-e", SCRIPT_RUNNER],
+                cwd=root,
+                input=RESOLVER["with"]["script"],
+                env={**os.environ, "PATH": "", "GITHUB_WORKSPACE": root,
+                     "INPUT_PM": pm, "INPUT_NODE": node, "PROJECT_PATH": path,
                      "GITHUB_ENV": str(env_file), "GITHUB_OUTPUT": str(output_file)},
                 capture_output=True, text=True,
             )
@@ -43,36 +64,35 @@ class ToolchainTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result, values
 
-    def test_node_declarations_delegate_to_setup_node(self):
+    def test_node_declarations_resolve(self):
         manifests = [
             {"devEngines": {"runtime": {"name": "node", "version": "22.x"}}},
             {"devEngines": {"runtime": [{"name": "bun", "version": "1"},
                                        {"name": "NODE", "version": ">=22 <23"}]}},
             {"engines": {"node": "22.x"}},
             {"volta": {"node": "22.14.0"}},
-            {"volta": {"extends": "../package.json"}},
         ]
-        for manifest in manifests:
+        for manifest, expected in zip(manifests, ["22.x", ">=22 <23", "22.x", "22.14.0"]):
             with self.subTest(manifest=manifest):
                 _, values = self.successful(manifest=manifest, path="sites/my site")
-                self.assertEqual(values["node-version"], "")
-                self.assertEqual(values["node-version-file"], "sites/my site/package.json")
+                self.assertEqual(values["node-version"], expected)
 
     def test_node_fallback(self):
         for manifest in [None, {}, {"devEngines": {}},
                          {"devEngines": {"runtime": {"name": "node"}}},
                          {"devEngines": {"runtime": {"name": "bun", "version": "1"}}},
-                         {"devEngines": {"runtime": []}}]:
+                         {"devEngines": {"runtime": []}},
+                         {"engines": {"node": ""}}, {"engines": {"node": "  "}},
+                         {"volta": {"node": ""}}, {"volta": {"extends": ""}},
+                         {"devEngines": {"runtime": {"name": "node", "version": ""}}}]:
             with self.subTest(manifest=manifest):
                 _, values = self.successful(manifest=manifest)
                 self.assertEqual(values["node-version"], "24")
-                self.assertEqual(values["node-version-file"], "")
 
     def test_node_override(self):
         _, values = self.successful(node="24.1.0", manifest={
             "devEngines": {"runtime": {"name": "node", "version": "22.x"}}})
         self.assertEqual(values["node-version"], "24.1.0")
-        self.assertEqual(values["node-version-file"], "")
 
     def test_pnpm_manifest_versions_delegate(self):
         for manifest in [
@@ -129,18 +149,69 @@ class ToolchainTests(unittest.TestCase):
     def test_malformed_manifest_fails(self):
         with tempfile.TemporaryDirectory() as root:
             (Path(root) / "package.json").write_text("{broken")
-            result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", RESOLVER["run"]],
-                                    cwd=root, env={**os.environ, "INPUT_NODE": "", "INPUT_PM": ""},
+            result = subprocess.run([NODE, "-e", SCRIPT_RUNNER],
+                                    input=RESOLVER["with"]["script"], cwd=root,
+                                    env={**os.environ, "GITHUB_WORKSPACE": root, "PROJECT_PATH": ".",
+                                         "INPUT_NODE": "", "INPUT_PM": ""},
                                     capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("parse error", result.stderr)
+            self.assertIn("JSON", result.stderr)
+
+    def test_inherited_node_and_fallback(self):
+        for parent, expected in [({"volta": {"node": "22.x"}}, "22.x"),
+                                 ({"engines": {"node": "22.x"}}, "22.x"),
+                                 ({"volta": {"yarn": "1.22.22"}}, "24"),
+                                 ({"engines": {"node": ""}}, "24")]:
+            with self.subTest(parent=parent):
+                _, values = self.successful(
+                    path="sites/my site", manifest={"volta": {"extends": "../../package.json"}},
+                    inherited={"package.json": parent})
+                self.assertEqual(values["node-version"], expected)
+
+    def test_inheritance_chain_and_precedence(self):
+        _, values = self.successful(
+            path="sites/my site", manifest={"volta": {"extends": "../package.json"}},
+            inherited={"sites/package.json": {"volta": {"extends": "../package.json"}},
+                       "package.json": {"engines": {"node": "22.x"}}})
+        self.assertEqual(values["node-version"], "22.x")
+        # An explicit local declaration takes precedence over inherited config.
+        for manifest, expected in [
+            ({"volta": {"node": "24", "extends": "missing.json"},
+              "devEngines": {"runtime": {"name": "node", "version": "22.x"}}}, "24"),
+            ({"engines": {"node": "24"}, "devEngines": {
+                "runtime": [{"name": "node", "version": "22.x"},
+                            {"name": "node", "version": "24"}]}}, "22.x"),
+            ({"engines": {"node": "22.x"}, "volta": {"extends": "missing.json"}}, "22.x"),
+        ]:
+            with self.subTest(manifest=manifest):
+                _, values = self.successful(manifest=manifest)
+                self.assertEqual(values["node-version"], expected)
+
+    def test_broken_and_circular_inheritance_fail(self):
+        for target, expected in [("missing.json", "ENOENT"), ("package.json", "Circular")]:
+            with self.subTest(target=target):
+                result, _ = self.resolve(manifest={"volta": {"extends": target}})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+
+    def test_explicit_node_skips_inheritance(self):
+        _, values = self.successful(node="24", manifest={"volta": {"extends": "missing.json"}})
+        self.assertEqual(values["node-version"], "24")
+
+    def test_npm_without_path_tools(self):
+        # resolve() runs Node by absolute path with an empty PATH: neither jq nor
+        # a system Node installation is needed by the github-script action body.
+        for node in ["", "24"]:
+            with self.subTest(node=node):
+                _, values = self.successful(manifest={}, files=["package-lock.json"], pm="npm", node=node)
+                self.assertEqual(values["node-version"], "24")
+                self.assertEqual(values["PACKAGE_MANAGER"], "npm")
 
     def test_setup_actions_receive_resolved_inputs(self):
         self.assertEqual(ACTION["inputs"]["node-version"]["default"], "")
         for step in ACTION["runs"]["steps"]:
             if step.get("uses", "").startswith("actions/setup-node@"):
                 self.assertEqual(step["with"]["node-version"], "${{ steps.toolchain.outputs.node-version }}")
-                self.assertEqual(step["with"]["node-version-file"], "${{ steps.toolchain.outputs.node-version-file }}")
             if step.get("uses", "").startswith("pnpm/action-setup@"):
                 self.assertEqual(step["with"]["version"], "${{ env.VERSION }}")
                 self.assertEqual(step["with"]["package_json_file"], "${{ inputs.path }}/package.json")

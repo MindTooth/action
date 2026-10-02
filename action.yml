@@ -38,90 +38,95 @@ runs:
   steps:
     - name: Resolve toolchain
       id: toolchain
-      shell: "bash"
-      working-directory: ${{ inputs.path }}
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
       env:
         INPUT_PM: ${{ inputs.package-manager }}
         INPUT_NODE: ${{ inputs.node-version }}
         PROJECT_PATH: ${{ inputs.path }}
-      run: |
-        # Fail on malformed manifests rather than silently selecting defaults.
-        if [ -f package.json ]; then
-          jq empty package.json
-        fi
+      with:
+        script: |
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const projectPath = path.resolve(process.env.GITHUB_WORKSPACE, process.env.PROJECT_PATH);
+          const manifestPath = path.join(projectPath, 'package.json');
+          const hasFile = (name) => fs.existsSync(path.join(projectPath, name));
+          const nonempty = (value) => typeof value === 'string' && value.trim().length > 0;
+          const readManifest = (filename) => {
+            const manifest = JSON.parse(fs.readFileSync(filename, 'utf8'));
+            if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+              throw new Error(`Expected a package.json object in ${filename}`);
+            }
+            return manifest;
+          };
+          const manifest = hasFile('package.json') ? readManifest(manifestPath) : {};
 
-        NODE_VERSION="$INPUT_NODE"
-        NODE_VERSION_FILE=""
-        if [ -z "$NODE_VERSION" ]; then
-          # Let setup-node resolve precedence, runtime arrays, and Volta inheritance.
-          if [ -f package.json ] && jq -e '
-            .volta.node or .volta.extends or .engines.node or
-            ([.devEngines.runtime // []] | flatten |
-              any((.name? | strings | ascii_downcase == "node") and
-                (.version? | strings | length > 0)))
-          ' package.json > /dev/null; then
-            NODE_VERSION_FILE="$PROJECT_PATH/package.json"
-          else
-            NODE_VERSION="24"
-          fi
-        fi
-        echo "node-version=$NODE_VERSION" >> "$GITHUB_OUTPUT"
-        echo "node-version-file=$NODE_VERSION_FILE" >> "$GITHUB_OUTPUT"
+          // Match setup-node's manifest precedence, but always supply a fallback.
+          const visited = new Set();
+          function nodeVersionFromManifest(filename, pkg) {
+            if (nonempty(pkg.volta?.node)) return pkg.volta.node;
+            const runtime = [pkg.devEngines?.runtime ?? []].flat().find(
+              (entry) => entry?.name?.toLowerCase?.() === 'node' && nonempty(entry.version)
+            );
+            if (runtime) return runtime.version;
+            if (nonempty(pkg.engines?.node)) return pkg.engines.node;
+            if (nonempty(pkg.volta?.extends)) {
+              const canonicalPath = fs.realpathSync(filename);
+              if (visited.has(canonicalPath)) {
+                throw new Error(`Circular Volta inheritance in ${filename}`);
+              }
+              visited.add(canonicalPath);
+              const inheritedPath = path.resolve(path.dirname(filename), pkg.volta.extends);
+              return nodeVersionFromManifest(inheritedPath, readManifest(inheritedPath));
+            }
+          }
+          const nodeVersion = process.env.INPUT_NODE || nodeVersionFromManifest(manifestPath, manifest) || '24';
+          core.setOutput('node-version', nodeVersion);
 
-        VERSION=""
-        LOCKFILE=""
-        if [ -n "$INPUT_PM" ]; then
-          PACKAGE_MANAGER="${INPUT_PM%%@*}"
-          if [[ "$INPUT_PM" == *@* ]]; then
-            VERSION="${INPUT_PM#*@}"
-          fi
-        elif [ -f pnpm-lock.yaml ]; then
-          PACKAGE_MANAGER="pnpm"
-        elif [ -f yarn.lock ]; then
-          PACKAGE_MANAGER="yarn"
-        elif [ -f package-lock.json ]; then
-          PACKAGE_MANAGER="npm"
-        elif [ -f bun.lock ] || [ -f bun.lockb ]; then
-          PACKAGE_MANAGER="bun"
-        elif [ -f deno.json ] || [ -f deno.jsonc ] || [ -f deno.lock ]; then
-          PACKAGE_MANAGER="deno"
-        else
-          echo 'No lockfile found. Please specify your preferred "package-manager" in the action configuration.'
-          exit 1
-        fi
+          let packageManager;
+          let version = '';
+          const input = process.env.INPUT_PM;
+          if (input) {
+            const separator = input.indexOf('@');
+            packageManager = separator < 0 ? input : input.slice(0, separator);
+            version = separator < 0 ? '' : input.slice(separator + 1);
+          } else if (hasFile('pnpm-lock.yaml')) {
+            packageManager = 'pnpm';
+          } else if (hasFile('yarn.lock')) {
+            packageManager = 'yarn';
+          } else if (hasFile('package-lock.json')) {
+            packageManager = 'npm';
+          } else if (hasFile('bun.lock') || hasFile('bun.lockb')) {
+            packageManager = 'bun';
+          } else if (hasFile('deno.json') || hasFile('deno.jsonc') || hasFile('deno.lock')) {
+            packageManager = 'deno';
+          } else {
+            throw new Error('No lockfile found. Please specify your preferred "package-manager" in the action configuration.');
+          }
 
-        # Determine the cache lockfile even when the package manager is explicit.
-        case "$PACKAGE_MANAGER" in
-          pnpm) LOCKFILE="pnpm-lock.yaml" ;;
-          yarn) LOCKFILE="yarn.lock" ;;
-          npm) LOCKFILE="package-lock.json" ;;
-          bun)
-            if [ -f bun.lock ]; then LOCKFILE="bun.lock"; else LOCKFILE="bun.lockb"; fi
-            ;;
-          deno) LOCKFILE="deno.lock" ;;
-          *) echo "Unsupported package manager: $PACKAGE_MANAGER"; exit 1 ;;
-        esac
+          const lockfiles = new Map([
+            ['pnpm', 'pnpm-lock.yaml'], ['yarn', 'yarn.lock'], ['npm', 'package-lock.json'],
+            ['bun', hasFile('bun.lock') ? 'bun.lock' : 'bun.lockb'], ['deno', 'deno.lock']
+          ]);
+          if (!lockfiles.has(packageManager)) {
+            throw new Error(`Unsupported package manager: ${packageManager}`);
+          }
 
-        if [ "$PACKAGE_MANAGER" = "pnpm" ] && [ -z "$VERSION" ]; then
-          # pnpm/action-setup resolves devEngines before packageManager itself.
-          if ! { [ -f package.json ] && jq -e '
-            ((.devEngines.packageManager | type) == "object" and
-              .devEngines.packageManager.name == "pnpm" and
-              (.devEngines.packageManager.version | strings | length > 0)) or
-            (.packageManager | strings | startswith("pnpm@"))
-          ' package.json > /dev/null; }; then
-            VERSION="latest"
-            echo '::warning title=Could not detect PNPM version::No pnpm version found in package.json packageManager or devEngines.packageManager. Using latest PNPM version instead.'
-          fi
-        elif [ -z "$VERSION" ]; then
-          case "$PACKAGE_MANAGER" in
-            deno) VERSION="vx.x.x" ;;
-            npm|bun) VERSION="latest" ;;
-          esac
-        fi
-        echo "PACKAGE_MANAGER=$PACKAGE_MANAGER" >> "$GITHUB_ENV"
-        echo "LOCKFILE=$LOCKFILE" >> "$GITHUB_ENV"
-        echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if (packageManager === 'pnpm' && !version) {
+            // Let pnpm/action-setup resolve devEngines before packageManager.
+            const devPM = manifest.devEngines?.packageManager;
+            const declared = (!Array.isArray(devPM) && devPM?.name === 'pnpm' && nonempty(devPM.version)) ||
+              (typeof manifest.packageManager === 'string' && manifest.packageManager.startsWith('pnpm@'));
+            if (!declared) {
+              version = 'latest';
+              core.warning('No pnpm version found in package.json packageManager or devEngines.packageManager. Using latest PNPM version instead.');
+            }
+          } else if (!version) {
+            if (packageManager === 'deno') version = 'vx.x.x';
+            else if (packageManager === 'npm' || packageManager === 'bun') version = 'latest';
+          }
+          core.exportVariable('PACKAGE_MANAGER', packageManager);
+          core.exportVariable('LOCKFILE', lockfiles.get(packageManager));
+          core.exportVariable('VERSION', version);
     - name: Setup PNPM
       if: ${{ env.PACKAGE_MANAGER == 'pnpm' }}
       uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -146,7 +151,6 @@ runs:
       if: ${{ env.PACKAGE_MANAGER != 'bun' && env.PACKAGE_MANAGER != 'deno' }}
       with:
         node-version: ${{ steps.toolchain.outputs.node-version }}
-        node-version-file: ${{ steps.toolchain.outputs.node-version-file }}
         cache: ${{ env.PACKAGE_MANAGER }}
         cache-dependency-path: "${{ inputs.path }}/${{ env.LOCKFILE }}"
 
@@ -155,7 +159,6 @@ runs:
       if: ${{ env.PACKAGE_MANAGER == 'bun' }}
       with:
         node-version: ${{ steps.toolchain.outputs.node-version }}
-        node-version-file: ${{ steps.toolchain.outputs.node-version-file }}
 
     - name: Install
       shell: bash

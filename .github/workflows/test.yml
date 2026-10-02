@@ -20,20 +20,33 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [runtime-object, runtime-array, node-override, bare-pnpm, pnpm-precedence, defaults]
+        scenario: [runtime-object, runtime-array, node-override, bare-pnpm, pnpm-precedence, defaults, empty-fields, inherited-node, inherited-empty, npm-no-jq]
     env:
       SCENARIO: ${{ matrix.scenario }}
-      EXPECT_NODE: ${{ (matrix.scenario == 'node-override' || matrix.scenario == 'defaults') && '24' || '22' }}
+      EXPECT_NODE: ${{ contains(fromJSON('["node-override", "defaults", "empty-fields", "inherited-empty", "npm-no-jq"]'), matrix.scenario) && '24' || '22' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Create project fixture
         run: python3 tests/create_integration_fixture.py
+      - name: Seed Node 22 to verify fallback replaces the existing runtime
+        if: env.EXPECT_NODE == '24'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Make jq unavailable
+        if: matrix.scenario == 'npm-no-jq'
+        run: |
+          mkdir -p "$RUNNER_TEMP/without-jq"
+          printf '#!/bin/sh\nexit 127\n' > "$RUNNER_TEMP/without-jq/jq"
+          chmod +x "$RUNNER_TEMP/without-jq/jq"
+          echo "$RUNNER_TEMP/without-jq" >> "$GITHUB_PATH"
       - name: Install and build with the composite action
         uses: ./
         with:
           path: work/test site
           node-version: ${{ matrix.scenario == 'node-override' && '24' || '' }}
-          package-manager: ${{ matrix.scenario == 'bare-pnpm' && 'pnpm' || '' }}
+          package-manager: ${{ matrix.scenario == 'bare-pnpm' && 'pnpm' || matrix.scenario == 'npm-no-jq' && 'npm' || '' }}
           cache: false
       - name: Verify build output
         run: test -f 'work/test site/dist/index.html'

@@ -12,8 +12,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: python3 -m pip install PyYAML==6.0.3
-      - run: python3 -m unittest discover -s tests -v
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm ci --prefix tests
+      - run: npm test --prefix tests
 
   integration:
     runs-on: ubuntu-latest
@@ -27,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Create project fixture
-        run: python3 tests/create_integration_fixture.py
+        run: node tests/create-integration-fixture.mjs
       - name: Seed Node 22 to verify fallback replaces the existing runtime
         if: env.EXPECT_NODE == '24'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

@@ -1,0 +1,11 @@
+{
+  "name": "astro-action-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test toolchain.test.mjs"
+  },
+  "devDependencies": {
+    "yaml": "2.9.1"
+  }
+}

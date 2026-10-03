@@ -33,27 +33,34 @@ elif scenario in ["inherited-node", "inherited-empty"]:
     manifest["volta"] = {"extends": "../package.json"}
     parent = {"volta": {"node": "22.x"}} if scenario == "inherited-node" else {"volta": {"yarn": "1.22.22"}}
     (project.parent / "package.json").write_text(json.dumps(parent))
-elif scenario == "npm-no-jq":
-    del manifest["devEngines"]
+elif scenario.startswith("npm-"):
+    manifest["devEngines"]["packageManager"] = {"name": "npm"}
+    if scenario == "npm-no-lockfile":
+        # setup-node auto-detects npm from the repository root unless disabled.
+        Path("package.json").write_text(json.dumps({"packageManager": "npm@11.6.2"}))
 
 (project / "package.json").write_text(json.dumps(manifest))
 (project / "pnpm-lock.yaml").write_text(
     "lockfileVersion: '9.0'\nsettings:\n  autoInstallPeers: true\n"
     "  excludeLinksFromLockfile: false\nimporters:\n  .: {}\n"
 )
-if scenario == "npm-no-jq":
+if scenario.startswith("npm-"):
     (project / "pnpm-lock.yaml").unlink()
-    (project / "package-lock.json").write_text(json.dumps({
-        "name": "toolchain-integration", "lockfileVersion": 3, "requires": True,
-        "packages": {"": {"name": "toolchain-integration"}},
-    }))
+    if scenario != "npm-no-lockfile":
+        lockfile = "npm-shrinkwrap.json" if scenario == "npm-shrinkwrap" else "package-lock.json"
+        (project / lockfile).write_text(json.dumps({
+            "name": "toolchain-integration", "lockfileVersion": 3, "requires": True,
+            "packages": {"": {"name": "toolchain-integration"}},
+        }))
+elif scenario == "pnpm-no-lockfile":
+    (project / "pnpm-lock.yaml").unlink()
 
 (project / "build.cjs").write_text("""
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { execFileSync } = require('node:child_process');
 assert.equal(process.versions.node.split('.')[0], process.env.EXPECT_NODE);
-if (process.env.SCENARIO !== 'npm-no-jq') {
+if (!process.env.SCENARIO.startsWith('npm-')) {
   assert.equal(execFileSync('pnpm', ['--version'], { encoding: 'utf8' }).trim(), '11.28.2');
 }
 fs.mkdirSync('dist', { recursive: true });

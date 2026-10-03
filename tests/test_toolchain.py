@@ -135,10 +135,36 @@ class ToolchainTests(unittest.TestCase):
                     self.assertEqual(values["PACKAGE_MANAGER"], pm)
                     self.assertEqual(values["LOCKFILE"], lockfile)
                     self.assertEqual(values["VERSION"], version)
+                    cached = pm in ["npm", "pnpm", "yarn"]
+                    self.assertEqual(values["dependency-cache"], pm if cached else "")
+                    if cached:
+                        self.assertTrue(values["dependency-cache-path"].endswith("/" + lockfile))
+                    else:
+                        self.assertEqual(values["dependency-cache-path"], "")
 
     def test_explicit_manager_without_lockfile(self):
-        _, values = self.successful(files=[], pm="pnpm@11.28.2")
-        self.assertEqual(values["PACKAGE_MANAGER"], "pnpm")
+        for pm in ["pnpm@11.28.2", "npm", "yarn", "bun", "deno"]:
+            with self.subTest(pm=pm):
+                _, values = self.successful(files=[], pm=pm)
+                self.assertEqual(values["PACKAGE_MANAGER"], pm.split("@")[0])
+                self.assertEqual(values["LOCKFILE"], "")
+                self.assertEqual(values["dependency-cache"], "")
+                self.assertEqual(values["dependency-cache-path"], "")
+
+    def test_npm_shrinkwrap_and_precedence(self):
+        for files in [["npm-shrinkwrap.json"], ["package-lock.json", "npm-shrinkwrap.json"]]:
+            for pm in ["", "npm"]:
+                with self.subTest(files=files, pm=pm):
+                    _, values = self.successful(files=files, pm=pm)
+                    self.assertEqual(values["PACKAGE_MANAGER"], "npm")
+                    self.assertEqual(values["LOCKFILE"], "npm-shrinkwrap.json")
+                    self.assertEqual(values["dependency-cache"], "npm")
+                    self.assertTrue(values["dependency-cache-path"].endswith("/npm-shrinkwrap.json"))
+
+    def test_cache_only_uses_selected_managers_lockfile(self):
+        _, values = self.successful(files=["pnpm-lock.yaml"], pm="npm")
+        self.assertEqual(values["dependency-cache"], "")
+        self.assertEqual(values["dependency-cache-path"], "")
 
     def test_missing_lockfile_and_invalid_manager_fail(self):
         for kwargs in [{"files": []}, {"pm": "invalid"}]:
@@ -212,6 +238,10 @@ class ToolchainTests(unittest.TestCase):
         for step in ACTION["runs"]["steps"]:
             if step.get("uses", "").startswith("actions/setup-node@"):
                 self.assertEqual(step["with"]["node-version"], "${{ steps.toolchain.outputs.node-version }}")
+                self.assertIs(step["with"]["package-manager-cache"], False)
+                if step["name"] == "Setup Node":
+                    self.assertEqual(step["with"]["cache"], "${{ steps.toolchain.outputs.dependency-cache }}")
+                    self.assertEqual(step["with"]["cache-dependency-path"], "${{ steps.toolchain.outputs.dependency-cache-path }}")
             if step.get("uses", "").startswith("pnpm/action-setup@"):
                 self.assertEqual(step["with"]["version"], "${{ env.VERSION }}")
                 self.assertEqual(step["with"]["package_json_file"], "${{ inputs.path }}/package.json")

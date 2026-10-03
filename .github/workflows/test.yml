@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [runtime-object, runtime-array, node-override, bare-pnpm, pnpm-precedence, defaults, empty-fields, inherited-node, inherited-empty, npm-no-jq]
+        scenario: [runtime-object, runtime-array, node-override, bare-pnpm, pnpm-precedence, defaults, empty-fields, inherited-node, inherited-empty, npm-no-jq, npm-shrinkwrap, npm-no-lockfile, pnpm-no-lockfile]
     env:
       SCENARIO: ${{ matrix.scenario }}
       EXPECT_NODE: ${{ contains(fromJSON('["node-override", "defaults", "empty-fields", "inherited-empty", "npm-no-jq"]'), matrix.scenario) && '24' || '22' }}
@@ -46,7 +46,7 @@ jobs:
         with:
           path: work/test site
           node-version: ${{ matrix.scenario == 'node-override' && '24' || '' }}
-          package-manager: ${{ matrix.scenario == 'bare-pnpm' && 'pnpm' || matrix.scenario == 'npm-no-jq' && 'npm' || '' }}
+          package-manager: ${{ matrix.scenario == 'pnpm-no-lockfile' && 'pnpm@11.28.2' || matrix.scenario == 'bare-pnpm' && 'pnpm' || startsWith(matrix.scenario, 'npm-') && 'npm' || '' }}
           cache: false
       - name: Verify build output
         run: test -f 'work/test site/dist/index.html'

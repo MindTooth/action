@@ -18,6 +18,12 @@ For more information, please see our complete deployment guide—[Deploy your As
 - `cache-dir` - Optional: path to the Astro cache directory (relative to `path`). Defaults to `node_modules/.astro`. Only used when `cache` is `true`.
 - `out-dir` - Optional: path to the Astro output directory, as created by build (relative to `path`). Defaults to `dist`. This directory is artifacted by this action.
 
+Dependency caching uses an existing lockfile for the selected package manager.
+For npm, `npm-shrinkwrap.json` takes precedence over `package-lock.json`. With an
+explicit `package-manager` and no lockfile, dependency caching is disabled and
+installation proceeds normally. The `cache` input controls the separate Astro
+build cache.
+
 ### Using devEngines
 
 Declare the Node and pnpm versions in the `package.json` under `path`:

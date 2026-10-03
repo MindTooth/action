@@ -93,7 +93,7 @@ runs:
             packageManager = 'pnpm';
           } else if (hasFile('yarn.lock')) {
             packageManager = 'yarn';
-          } else if (hasFile('package-lock.json')) {
+          } else if (hasFile('package-lock.json') || hasFile('npm-shrinkwrap.json')) {
             packageManager = 'npm';
           } else if (hasFile('bun.lock') || hasFile('bun.lockb')) {
             packageManager = 'bun';
@@ -104,8 +104,9 @@ runs:
           }
 
           const lockfiles = new Map([
-            ['pnpm', 'pnpm-lock.yaml'], ['yarn', 'yarn.lock'], ['npm', 'package-lock.json'],
-            ['bun', hasFile('bun.lock') ? 'bun.lock' : 'bun.lockb'], ['deno', 'deno.lock']
+            ['pnpm', ['pnpm-lock.yaml']], ['yarn', ['yarn.lock']],
+            ['npm', ['npm-shrinkwrap.json', 'package-lock.json']],
+            ['bun', ['bun.lock', 'bun.lockb']], ['deno', ['deno.lock']]
           ]);
           if (!lockfiles.has(packageManager)) {
             throw new Error(`Unsupported package manager: ${packageManager}`);
@@ -124,8 +125,12 @@ runs:
             if (packageManager === 'deno') version = 'vx.x.x';
             else if (packageManager === 'npm' || packageManager === 'bun') version = 'latest';
           }
+          const lockfile = lockfiles.get(packageManager).find(hasFile) || '';
+          const dependencyCache = lockfile && ['npm', 'pnpm', 'yarn'].includes(packageManager) ? packageManager : '';
+          core.setOutput('dependency-cache', dependencyCache);
+          core.setOutput('dependency-cache-path', dependencyCache ? path.join(projectPath, lockfile) : '');
           core.exportVariable('PACKAGE_MANAGER', packageManager);
-          core.exportVariable('LOCKFILE', lockfiles.get(packageManager));
+          core.exportVariable('LOCKFILE', lockfile);
           core.exportVariable('VERSION', version);
     - name: Setup PNPM
       if: ${{ env.PACKAGE_MANAGER == 'pnpm' }}
@@ -151,14 +156,17 @@ runs:
       if: ${{ env.PACKAGE_MANAGER != 'bun' && env.PACKAGE_MANAGER != 'deno' }}
       with:
         node-version: ${{ steps.toolchain.outputs.node-version }}
-        cache: ${{ env.PACKAGE_MANAGER }}
-        cache-dependency-path: "${{ inputs.path }}/${{ env.LOCKFILE }}"
+        cache: ${{ steps.toolchain.outputs.dependency-cache }}
+        cache-dependency-path: ${{ steps.toolchain.outputs.dependency-cache-path }}
+        # An empty cache input must not trigger setup-node's automatic npm cache.
+        package-manager-cache: false
 
     - name: Setup Node (Bun)
       uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       if: ${{ env.PACKAGE_MANAGER == 'bun' }}
       with:
         node-version: ${{ steps.toolchain.outputs.node-version }}
+        package-manager-cache: false
 
     - name: Install
       shell: bash

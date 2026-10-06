@@ -123,10 +123,60 @@ test('pnpm falls back to latest with a warning', () => {
   }
 });
 
-test('explicit pnpm version overrides the manifest', () => {
+test('explicit pnpm version is passed to setup; install may enforce the manifest', () => {
   assert.equal(successful({ pm: 'pnpm@11.28.2', manifest: {
     devEngines: { packageManager: { name: 'pnpm', version: '9.0.0' } },
   } }).values.VERSION, '11.28.2');
+});
+
+test('bare pnpm without a lockfile still delegates its manifest version', () => {
+  const { values, stdout } = successful({ files: [], pm: 'pnpm', manifest: {
+    devEngines: { packageManager: { name: 'pnpm', version: '>=11.28.1 <=11.28.2' } },
+  } });
+  assert.equal(values.PACKAGE_MANAGER, 'pnpm');
+  assert.equal(values.VERSION, '');
+  assert.equal(values['dependency-cache'], '');
+  assert.equal(values['dependency-cache-path'], '');
+  assert.ok(!stdout.includes('::warning'));
+});
+
+test('manifest declarations do not select a manager without a lockfile or input', () => {
+  const result = resolve({ files: [], manifest: {
+    packageManager: 'pnpm@11.28.2',
+    devEngines: { packageManager: { name: 'pnpm', version: '11.28.2' } },
+  } });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /No lockfile found/);
+});
+
+test('lockfile selects the manager even when devEngines declares another manager', () => {
+  const { values } = successful({ files: ['package-lock.json'], manifest: {
+    devEngines: { packageManager: { name: 'pnpm', version: '11.28.2' } },
+  } });
+  assert.equal(values.PACKAGE_MANAGER, 'npm');
+  assert.equal(values.LOCKFILE, 'package-lock.json');
+  assert.equal(values['dependency-cache'], 'npm');
+});
+
+test('pnpm package-manager arrays are not treated as supported declarations', () => {
+  for (const packageManager of [undefined, 'pnpm@11.28.2']) {
+    const { values, stdout } = successful({ manifest: {
+      packageManager,
+      devEngines: { packageManager: [{ name: 'pnpm', version: '11.28.1' }] },
+    } });
+    assert.equal(values.VERSION, packageManager ? '' : 'latest');
+    assert.equal(stdout.includes('::warning'), !packageManager);
+  }
+});
+
+test('Node runtime arrays skip unversioned entries and use the first versioned Node entry', () => {
+  const { values } = successful({ manifest: {
+    engines: { node: '24' },
+    devEngines: { runtime: [null, { name: 'node' }, { name: 'node', version: '  ' },
+      { name: 'bun', version: '1' }, { name: 'node', version: '22.x' },
+      { name: 'node', version: '24' }] },
+  } });
+  assert.equal(values['node-version'], '22.x');
 });
 
 test('other package managers resolve their lockfiles and cache support', () => {
@@ -186,6 +236,14 @@ test('malformed manifest fails', () => {
   const result = resolve({ rawManifest: '{broken' });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /JSON/);
+});
+
+test('valid JSON that is not a manifest object fails clearly', () => {
+  for (const rawManifest of ['null', '[]', '"package"', '24']) {
+    const result = resolve({ rawManifest });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Expected a package.json object/);
+  }
 });
 
 test('inherited Node resolves or falls back to 24', () => {

@@ -24,10 +24,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [runtime-object, runtime-array, node-override, bare-pnpm, pnpm-precedence, defaults, empty-fields, inherited-node, inherited-empty, npm-no-jq, npm-shrinkwrap, npm-no-lockfile, pnpm-no-lockfile]
+        scenario: [runtime-object, runtime-array, node-override, bare-pnpm, pnpm-precedence, pnpm-range, pnpm-override-download, pnpm-override-warn, pnpm-override-error, defaults, empty-fields, inherited-node, inherited-empty, npm-no-jq, npm-shrinkwrap, npm-no-lockfile, pnpm-no-lockfile]
     env:
       SCENARIO: ${{ matrix.scenario }}
       EXPECT_NODE: ${{ contains(fromJSON('["node-override", "defaults", "empty-fields", "inherited-empty", "npm-no-jq"]'), matrix.scenario) && '24' || '22' }}
+      EXPECT_PNPM: ${{ matrix.scenario == 'pnpm-override-warn' && '11.28.1' || '11.28.2' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Create project fixture
@@ -46,11 +47,15 @@ jobs:
           chmod +x "$RUNNER_TEMP/without-jq/jq"
           echo "$RUNNER_TEMP/without-jq" >> "$GITHUB_PATH"
       - name: Install and build with the composite action
+        id: build
+        continue-on-error: ${{ matrix.scenario == 'pnpm-override-error' }}
         uses: ./
         with:
           path: work/test site
           node-version: ${{ matrix.scenario == 'node-override' && '24' || '' }}
-          package-manager: ${{ matrix.scenario == 'pnpm-no-lockfile' && 'pnpm@11.28.2' || matrix.scenario == 'bare-pnpm' && 'pnpm' || startsWith(matrix.scenario, 'npm-') && 'npm' || '' }}
+          package-manager: ${{ startsWith(matrix.scenario, 'pnpm-override-') && 'pnpm@11.28.1' || matrix.scenario == 'pnpm-no-lockfile' && 'pnpm@11.28.2' || matrix.scenario == 'bare-pnpm' && 'pnpm' || startsWith(matrix.scenario, 'npm-') && 'npm' || '' }}
           cache: false
-      - name: Verify build output
-        run: test -f 'work/test site/dist/index.html'
+      - name: Verify install and build outcomes
+        env:
+          ACTION_OUTCOME: ${{ steps.build.outcome }}
+        run: node tests/verify-integration.mjs
